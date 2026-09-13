@@ -1514,6 +1514,7 @@ export default function CustomerSupportPage({
             flexDirection: "column",
             flex: "none",
             padding: "10px 18px 20px",
+            overflow: "visible",
           }
           : isMobile && chatOpen
             ? {
@@ -1538,28 +1539,37 @@ export default function CustomerSupportPage({
               flex: "1 1 0%",
               overflow: "hidden",
             }
-            : {
-              height: "auto",
-              minHeight: isMobile
-                ? (isAdmin ? `${adminPhoneHeight}px` : (viewportHeight ? `${Math.max(360, viewportHeight - navbarHeight)}px` : `calc(100dvh - ${navbarHeight}px)`))
-                : `calc(100vh - ${navbarHeight}px)`,
-              maxHeight: "none",
-              padding: isMobile ? (effectiveViewportWidth > 640 ? "8px 16px 10px" : "6px 8px 8px") : "8px 16px 10px",
-              display: "flex",
-              flexDirection: "column",
-              flex: "none",
-              overflow: "visible",
-            }),
+            : isMobile
+              ? {
+                height: "auto",
+                minHeight: isAdmin ? `${adminPhoneHeight}px` : (viewportHeight ? `${Math.max(360, viewportHeight - navbarHeight)}px` : `calc(100dvh - ${navbarHeight}px)`),
+                maxHeight: "none",
+                padding: effectiveViewportWidth > 640 ? "8px 16px 10px" : "6px 8px 8px",
+                display: "flex",
+                flexDirection: "column",
+                flex: "none",
+                overflow: "visible",
+              }
+              : {
+                height: `calc(100vh - ${navbarHeight}px)`,
+                minHeight: `calc(100vh - ${navbarHeight}px)`,
+                maxHeight: `calc(100vh - ${navbarHeight}px)`,
+                padding: "8px 16px 10px",
+                display: "flex",
+                flexDirection: "column",
+                flex: "1 1 0%",
+                overflow: "hidden",
+              }),
         background: primaryBg,
         color: textColor,
         boxSizing: "border-box",
         width: "100%",
         display: "flex",
         flexDirection: "column",
-        overflow: isMobile && chatOpen ? "hidden" : "visible",
+        overflow: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "hidden" : "visible",
         touchAction: !isAdmin && isMobile && chatOpen ? "none" : undefined,
         overscrollBehavior: isMobile && chatOpen ? "none" : "auto",
-        flex: isMobile && chatOpen ? "1 1 0%" : "none",
+        flex: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "1 1 0%" : "none",
       }}
     >
       <style>{`
@@ -1626,11 +1636,11 @@ export default function CustomerSupportPage({
           display: "flex",
           flexDirection: "column",
           gap: isMobile ? "6px" : "8px",
-          flex: isMobile && chatOpen ? "1 1 0%" : "none",
+          flex: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "1 1 0%" : "none",
           minHeight: 0,
-          height: isMobile && chatOpen ? "100%" : "auto",
-          maxHeight: isMobile && chatOpen ? "100%" : "none",
-          overflow: isMobile && chatOpen ? "hidden" : "visible",
+          height: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "100%" : "auto",
+          maxHeight: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "100%" : "none",
+          overflow: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "hidden" : "visible",
         }}
       >
         {/* Toast Notification */}
@@ -1942,10 +1952,10 @@ export default function CustomerSupportPage({
                   gap: isMobile ? "0px" : "10px",
                   boxSizing: "border-box",
                   width: "100%",
-                  flex: !isMobile ? "none" : (chatOpen ? "1 1 0%" : "none"),
-                  minHeight: isDesktopAdmin ? "440px" : (!isMobile ? "540px" : 0),
-                  height: isDesktopAdmin ? "480px" : (!isMobile ? "580px" : (chatOpen ? "100%" : "auto")),
-                  maxHeight: isDesktopAdmin ? "none" : (!isMobile ? "700px" : (chatOpen ? "100%" : "none")),
+                  flex: (!isAdmin && !isMobile) || (isMobile && chatOpen) ? "1 1 0%" : "none",
+                  minHeight: isDesktopAdmin ? "440px" : (!isMobile ? (!isAdmin ? "0px" : "540px") : 0),
+                  height: isDesktopAdmin ? "480px" : (!isMobile ? (!isAdmin ? "100%" : "580px") : (chatOpen ? "100%" : "auto")),
+                  maxHeight: isDesktopAdmin ? "none" : (!isMobile ? (!isAdmin ? "100%" : "700px") : (chatOpen ? "100%" : "none")),
                   display: "flex",
                   overflow: !isMobile ? "hidden" : (chatOpen ? "hidden" : "visible"),
                   boxShadow: isMobile ? "none" : "0 4px 20px rgba(0,0,0,0.03)",
@@ -3245,13 +3255,13 @@ export default function CustomerSupportPage({
                   padding: cardPadding,
                   width: "100%",
                   boxSizing: "border-box",
-                  flex: "none",
-                  minHeight: isDesktopAdmin ? "440px" : "auto",
-                  height: "auto",
-                  maxHeight: "none",
+                  flex: (!isAdmin && !isMobile) ? "1 1 0%" : "none",
+                  minHeight: isDesktopAdmin ? "440px" : (!isAdmin && !isMobile ? "0px" : "auto"),
+                  height: (!isAdmin && !isMobile) ? "100%" : "auto",
+                  maxHeight: (!isAdmin && !isMobile) ? "100%" : "none",
                   display: "flex",
                   flexDirection: "column",
-                  overflow: "visible",
+                  overflow: (!isAdmin && !isMobile) ? "hidden" : "visible",
                 }}
               >
                 <div style={{ marginBottom: "12px", flexShrink: 0 }}>
@@ -3287,10 +3297,10 @@ export default function CustomerSupportPage({
                     flexDirection: "column",
                     gap: "14px",
                     width: "100%",
-                    flex: "none",
-                    minHeight: "auto",
-                    height: "auto",
-                    overflowY: "visible",
+                    flex: (!isAdmin && !isMobile) ? "1 1 0%" : "none",
+                    minHeight: 0,
+                    height: (!isAdmin && !isMobile) ? "100%" : "auto",
+                    overflowY: (!isAdmin && !isMobile) ? "auto" : "visible",
                     paddingRight: "4px",
                   }}
                 >
