@@ -13,6 +13,9 @@ interface CouponItem {
   discountType: "percentage" | "fixed_amount" | "free_shipping";
   discountValue: number;
   maxDiscountAmount?: number | null;
+  appliesTo?: "all" | "collections" | "categories";
+  collectionIds?: string[];
+  categoryIds?: string[];
   minOrderValue: number;
   isFirstOrderOnly: boolean;
   totalUsageLimit?: number | null;
@@ -213,6 +216,9 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
   const [formType, setFormType] = useState<"percentage" | "fixed_amount" | "free_shipping">("percentage");
   const [formValue, setFormValue] = useState<string>("10");
   const [formMaxCap, setFormMaxCap] = useState<string>("");
+  const [formAppliesTo, setFormAppliesTo] = useState<"all" | "collections" | "categories">("all");
+  const [formCollectionIds, setFormCollectionIds] = useState<string[]>([]);
+  const [formCategoryIds, setFormCategoryIds] = useState<string[]>([]);
   const [formMinOrder, setFormMinOrder] = useState<string>("0");
   const [formFirstOrderOnly, setFormFirstOrderOnly] = useState(false);
   const [formTotalLimit, setFormTotalLimit] = useState<string>("");
@@ -221,6 +227,24 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
   const [formExpiresAt, setFormExpiresAt] = useState<string>("");
   const [formIsActive, setFormIsActive] = useState(true);
   const [formIsPublic, setFormIsPublic] = useState(true);
+
+  // Store Collections and Categories metadata
+  const [storeCollections, setStoreCollections] = useState<Array<{ id: string; name: string }>>([]);
+  const [storeCategories, setStoreCategories] = useState<Array<{ id: string; name: string }>>([]);
+  const [collectionsSearch, setCollectionsSearch] = useState("");
+  const [categoriesSearch, setCategoriesSearch] = useState("");
+
+  const collectionNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    storeCollections.forEach((c) => map.set(c.id, c.name));
+    return map;
+  }, [storeCollections]);
+
+  const categoryNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    storeCategories.forEach((c) => map.set(c.id, c.name));
+    return map;
+  }, [storeCategories]);
 
   // Validation Errors
   const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
@@ -268,8 +292,33 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
     }
   };
 
+  const fetchStoreScopeData = async () => {
+    if (!activeSiteId) return;
+    try {
+      const [colRes, catRes] = await Promise.all([
+        fetch(`${API_BASE}/sites/${activeSiteId}/collections`, { credentials: "include" }),
+        fetch(`${API_BASE}/sites/${activeSiteId}/categories`, { credentials: "include" }),
+      ]);
+      if (colRes.ok) {
+        const colData = await colRes.json();
+        if (Array.isArray(colData)) {
+          setStoreCollections(colData.map((c: any) => ({ id: String(c.id), name: c.name })));
+        }
+      }
+      if (catRes.ok) {
+        const catData = await catRes.json();
+        if (Array.isArray(catData)) {
+          setStoreCategories(catData.map((c: any) => ({ id: String(c.id), name: c.name })));
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load collections/categories for coupon scope", err);
+    }
+  };
+
   useEffect(() => {
     fetchCoupons(Boolean(cachedInitial));
+    fetchStoreScopeData();
   }, [activeSiteId]);
 
   const generateRandomCode = () => {
@@ -291,6 +340,11 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
     setFormType("percentage");
     setFormValue("10");
     setFormMaxCap("");
+    setFormAppliesTo("all");
+    setFormCollectionIds([]);
+    setFormCategoryIds([]);
+    setCollectionsSearch("");
+    setCategoriesSearch("");
     setFormMinOrder("0");
     setFormFirstOrderOnly(false);
     setFormTotalLimit("");
@@ -314,6 +368,11 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
     setFormType(coupon.discountType);
     setFormValue(String(coupon.discountValue));
     setFormMaxCap(coupon.maxDiscountAmount ? String(coupon.maxDiscountAmount) : "");
+    setFormAppliesTo(coupon.appliesTo || "all");
+    setFormCollectionIds(coupon.collectionIds || []);
+    setFormCategoryIds(coupon.categoryIds || []);
+    setCollectionsSearch("");
+    setCategoriesSearch("");
     setFormMinOrder(String(coupon.minOrderValue || "0"));
     setFormFirstOrderOnly(coupon.isFirstOrderOnly);
     setFormTotalLimit(coupon.totalUsageLimit ? String(coupon.totalUsageLimit) : "");
@@ -351,6 +410,14 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
           errors.maxCap = "Max savings cap must be greater than 0.";
         }
       }
+    }
+
+    if (formAppliesTo === "collections" && formCollectionIds.length === 0) {
+      errors.targeting = "Please select at least one collection.";
+    }
+
+    if (formAppliesTo === "categories" && formCategoryIds.length === 0) {
+      errors.targeting = "Please select at least one category.";
     }
 
     if (formMinOrder) {
@@ -404,6 +471,9 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
         discount_type: formType,
         discount_value: formType === "free_shipping" ? 0 : parseFloat(formValue) || 0,
         max_discount_amount: formType === "percentage" && formMaxCap ? parseFloat(formMaxCap) : null,
+        applies_to: formAppliesTo,
+        collection_ids: formAppliesTo === "collections" ? formCollectionIds : [],
+        category_ids: formAppliesTo === "categories" ? formCategoryIds : [],
         min_order_value: parseFloat(formMinOrder) || 0,
         is_first_order_only: formFirstOrderOnly,
         total_usage_limit: formTotalLimit ? parseInt(formTotalLimit) : null,
@@ -1566,6 +1636,62 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
                               {coupon.perCustomerLimit === 1 ? "1 per customer" : `${coupon.perCustomerLimit}x per user`}
                             </span>
                           </div>
+
+                          {/* Targeting Scope Badge */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", marginTop: "1px" }}>
+                            {coupon.appliesTo === "collections" ? (
+                              <span
+                                title={coupon.collectionIds?.map((id) => collectionNameMap.get(id) || id).join(", ")}
+                                style={{
+                                  fontSize: "10.5px",
+                                  fontWeight: 700,
+                                  color: "#7c3aed",
+                                  background: "#f5f3ff",
+                                  border: "1px solid #ddd6fe",
+                                  padding: "1px 5px",
+                                  borderRadius: "3px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "3px",
+                                }}
+                              >
+                                <span>Collections ({coupon.collectionIds?.length || 0})</span>
+                              </span>
+                            ) : coupon.appliesTo === "categories" ? (
+                              <span
+                                title={coupon.categoryIds?.map((id) => categoryNameMap.get(id) || id).join(", ")}
+                                style={{
+                                  fontSize: "10.5px",
+                                  fontWeight: 700,
+                                  color: "#0891b2",
+                                  background: "#ecfeff",
+                                  border: "1px solid #a5f3fc",
+                                  padding: "1px 5px",
+                                  borderRadius: "3px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "3px",
+                                }}
+                              >
+                                <span>Categories ({coupon.categoryIds?.length || 0})</span>
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  fontSize: "10.5px",
+                                  fontWeight: 600,
+                                  color: "#64748b",
+                                  background: "#f8fafc",
+                                  border: "1px solid #e2e8f0",
+                                  padding: "1px 5px",
+                                  borderRadius: "3px",
+                                }}
+                              >
+                                All Products
+                              </span>
+                            )}
+                          </div>
+
                           {coupon.expiresAt && (
                             <span style={{ fontSize: "11px", color: expired ? "#dc2626" : isExpiringSoon(coupon) ? "#d97706" : "#64748b" }}>
                               {expired ? "Expired " : "Expires "} {new Date(coupon.expiresAt).toLocaleDateString()}
@@ -1978,6 +2104,297 @@ export default function AdminCoupons({ siteId: propSiteId }: { siteId?: string }
                             <ErrorBadge message={formErrors.maxCap} />
                           </div>
                         )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Card 3: Targeting & Scope */}
+                  <div style={{ background: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "14px 16px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #f1f5f9", paddingBottom: "6px" }}>
+                      <div style={{ fontSize: "12px", fontWeight: 700, color: "#0f172a", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                        Applicability & Targeting
+                      </div>
+                      <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b" }}>
+                        {formAppliesTo === "all" ? "All Products" : formAppliesTo === "collections" ? `${formCollectionIds.length} Selected` : `${formCategoryIds.length} Selected`}
+                      </span>
+                    </div>
+
+                    {/* Scope 3-Pill Switcher */}
+                    <div>
+                      <label style={labelStyle}>Applies To *</label>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px" }}>
+                        {[
+                          { id: "all", label: "All Products" },
+                          { id: "collections", label: "Collections" },
+                          { id: "categories", label: "Categories" },
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              setFormAppliesTo(opt.id as any);
+                              if (formErrors.targeting) setFormErrors((prev) => ({ ...prev, targeting: "" }));
+                            }}
+                            style={{
+                              padding: "7px 4px",
+                              borderRadius: "6px",
+                              border: formAppliesTo === opt.id ? "2px solid #2563eb" : "1px solid #cbd5e1",
+                              background: formAppliesTo === opt.id ? "#eff6ff" : "#ffffff",
+                              color: formAppliesTo === opt.id ? "#1d4ed8" : "#334155",
+                              fontSize: "11.5px",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                              textAlign: "center",
+                              transition: "all 0.15s ease",
+                            }}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Collections Picker */}
+                    {formAppliesTo === "collections" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <div style={{ fontSize: "12px", color: "#64748b" }}>
+                          Discount will only apply to items belonging to selected collections.
+                        </div>
+
+                        {/* Search input for collections */}
+                        <div style={{ position: "relative" }}>
+                          <input
+                            type="text"
+                            value={collectionsSearch}
+                            onChange={(e) => setCollectionsSearch(e.target.value)}
+                            placeholder="Search store collections..."
+                            style={{ ...inputStyle, height: "32px", fontSize: "12px" }}
+                          />
+                        </div>
+
+                        {/* Selected Collections Tags */}
+                        {formCollectionIds.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", padding: "4px 0" }}>
+                            {formCollectionIds.map((id) => {
+                              const name = collectionNameMap.get(id) || id;
+                              return (
+                                <span
+                                  key={id}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    background: "#f5f3ff",
+                                    border: "1px solid #ddd6fe",
+                                    color: "#6d28d9",
+                                    borderRadius: "4px",
+                                    padding: "2px 8px",
+                                    fontSize: "11.5px",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  <span>{name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setFormCollectionIds((prev) => prev.filter((item) => item !== id))}
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      color: "#6d28d9",
+                                      cursor: "pointer",
+                                      padding: 0,
+                                      fontSize: "12px",
+                                      lineHeight: 1,
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Collections Checklist / Grid */}
+                        <div
+                          style={{
+                            maxHeight: "150px",
+                            overflowY: "auto",
+                            border: "1px solid #e2e8f0",
+                            borderRadius: "6px",
+                            padding: "6px",
+                            background: "#f8fafc",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "4px",
+                          }}
+                        >
+                          {storeCollections.length === 0 ? (
+                            <div style={{ fontSize: "12px", color: "#94a3b8", padding: "8px", textAlign: "center" }}>
+                              No collections found in this store.
+                            </div>
+                          ) : (
+                            storeCollections
+                              .filter((c) => !collectionsSearch.trim() || c.name.toLowerCase().includes(collectionsSearch.toLowerCase()))
+                              .map((c) => {
+                                const isChecked = formCollectionIds.includes(c.id);
+                                return (
+                                  <label
+                                    key={c.id}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      padding: "5px 8px",
+                                      borderRadius: "4px",
+                                      background: isChecked ? "#ffffff" : "transparent",
+                                      cursor: "pointer",
+                                      fontSize: "12.5px",
+                                      color: "#1e293b",
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setFormCollectionIds((prev) => [...prev, c.id]);
+                                        } else {
+                                          setFormCollectionIds((prev) => prev.filter((id) => id !== c.id));
+                                        }
+                                        if (formErrors.targeting) setFormErrors((prev) => ({ ...prev, targeting: "" }));
+                                      }}
+                                      style={{ cursor: "pointer", width: "14px", height: "14px" }}
+                                    />
+                                    <span>{c.name}</span>
+                                  </label>
+                                );
+                              })
+                          )}
+                        </div>
+                        <ErrorBadge message={formErrors.targeting} />
+                      </div>
+                    )}
+
+                    {/* Categories Picker */}
+                    {formAppliesTo === "categories" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <div style={{ fontSize: "12px", color: "#64748b" }}>
+                          Discount will only apply to items belonging to selected categories.
+                        </div>
+
+                        {/* Search input for categories */}
+                        <div style={{ position: "relative" }}>
+                          <input
+                            type="text"
+                            value={categoriesSearch}
+                            onChange={(e) => setCategoriesSearch(e.target.value)}
+                            placeholder="Search store categories..."
+                            style={{ ...inputStyle, height: "32px", fontSize: "12px" }}
+                          />
+                        </div>
+
+                        {/* Selected Categories Tags */}
+                        {formCategoryIds.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", padding: "4px 0" }}>
+                            {formCategoryIds.map((id) => {
+                              const name = categoryNameMap.get(id) || id;
+                              return (
+                                <span
+                                  key={id}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    background: "#ecfeff",
+                                    border: "1px solid #a5f3fc",
+                                    color: "#0e7490",
+                                    borderRadius: "4px",
+                                    padding: "2px 8px",
+                                    fontSize: "11.5px",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  <span>{name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setFormCategoryIds((prev) => prev.filter((item) => item !== id))}
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      color: "#0e7490",
+                                      cursor: "pointer",
+                                      padding: 0,
+                                      fontSize: "12px",
+                                      lineHeight: 1,
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Categories Checklist / Grid */}
+                        <div
+                          style={{
+                            maxHeight: "150px",
+                            overflowY: "auto",
+                            border: "1px solid #e2e8f0",
+                            borderRadius: "6px",
+                            padding: "6px",
+                            background: "#f8fafc",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "4px",
+                          }}
+                        >
+                          {storeCategories.length === 0 ? (
+                            <div style={{ fontSize: "12px", color: "#94a3b8", padding: "8px", textAlign: "center" }}>
+                              No categories found in this store.
+                            </div>
+                          ) : (
+                            storeCategories
+                              .filter((c) => !categoriesSearch.trim() || c.name.toLowerCase().includes(categoriesSearch.toLowerCase()))
+                              .map((c) => {
+                                const isChecked = formCategoryIds.includes(c.id);
+                                return (
+                                  <label
+                                    key={c.id}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      padding: "5px 8px",
+                                      borderRadius: "4px",
+                                      background: isChecked ? "#ffffff" : "transparent",
+                                      cursor: "pointer",
+                                      fontSize: "12.5px",
+                                      color: "#1e293b",
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setFormCategoryIds((prev) => [...prev, c.id]);
+                                        } else {
+                                          setFormCategoryIds((prev) => prev.filter((id) => id !== c.id));
+                                        }
+                                        if (formErrors.targeting) setFormErrors((prev) => ({ ...prev, targeting: "" }));
+                                      }}
+                                      style={{ cursor: "pointer", width: "14px", height: "14px" }}
+                                    />
+                                    <span>{c.name}</span>
+                                  </label>
+                                );
+                              })
+                          )}
+                        </div>
+                        <ErrorBadge message={formErrors.targeting} />
                       </div>
                     )}
                   </div>

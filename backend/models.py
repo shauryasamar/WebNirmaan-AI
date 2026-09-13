@@ -621,6 +621,19 @@ class Coupon(SQLModel, table=True):
         sa_column=Column(Numeric(10, 2), nullable=True),
     )
 
+    applies_to: str = Field(
+        default="all",
+        sa_column=Column(String(30), nullable=False, default="all"),
+    )
+    collection_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    category_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+
     min_order_value: Decimal = Field(
         default=Decimal("0.00"),
         sa_column=Column(Numeric(10, 2), nullable=False, default=Decimal("0.00")),

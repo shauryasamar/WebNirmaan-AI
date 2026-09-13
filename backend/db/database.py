@@ -151,7 +151,11 @@ def create_db_and_tables():
                 ALTER TABLE user_addresses ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
 
                 ALTER TABLE coupons ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE;
+                ALTER TABLE coupons ADD COLUMN IF NOT EXISTS applies_to VARCHAR(30) DEFAULT 'all';
+                ALTER TABLE coupons ADD COLUMN IF NOT EXISTS collection_ids JSONB DEFAULT '[]'::jsonb;
+                ALTER TABLE coupons ADD COLUMN IF NOT EXISTS category_ids JSONB DEFAULT '[]'::jsonb;
                 CREATE INDEX IF NOT EXISTS ix_coupons_site_id_is_public ON coupons(site_id, is_public);
+                CREATE INDEX IF NOT EXISTS ix_coupons_site_id_applies_to ON coupons(site_id, applies_to);
                 ALTER TABLE user_addresses ADD COLUMN IF NOT EXISTS geo_accuracy VARCHAR(30);
 
                 ALTER TABLE delivery_settings ADD COLUMN IF NOT EXISTS sender_latitude DOUBLE PRECISION;

@@ -11,7 +11,7 @@ from sqlmodel import Session, func, select
 
 from auth_middleware import check_admin_has_permission, enforce_site_ownership
 from db.database import get_session
-from models import Coupon, CouponUsage, Order, Site, User
+from models import Coupon, CouponUsage, Order, Site, User, Collection, Category, Product, ProductCollection
 from services.audit_service import AuditService, ActorType, SourceType, AuditCategory
 
 router = APIRouter(prefix="/coupons", tags=["coupons"])
@@ -52,6 +52,9 @@ class CreateCouponRequest(BaseModel):
     discount_type: str = Field("percentage", pattern="^(percentage|fixed_amount|free_shipping)$")
     discount_value: Decimal = Field(default=Decimal("0.00"), ge=0)
     max_discount_amount: Optional[Decimal] = Field(default=None, ge=0)
+    applies_to: str = Field(default="all", pattern="^(all|collections|categories)$")
+    collection_ids: list[str] = Field(default_factory=list)
+    category_ids: list[str] = Field(default_factory=list)
     min_order_value: Decimal = Field(default=Decimal("0.00"), ge=0)
     is_first_order_only: bool = False
     total_usage_limit: Optional[int] = Field(default=None, ge=1)
@@ -67,6 +70,9 @@ class UpdateCouponRequest(BaseModel):
     discount_type: Optional[str] = None
     discount_value: Optional[Decimal] = None
     max_discount_amount: Optional[Decimal] = None
+    applies_to: Optional[str] = None
+    collection_ids: Optional[list[str]] = None
+    category_ids: Optional[list[str]] = None
     min_order_value: Optional[Decimal] = None
     is_first_order_only: Optional[bool] = None
     total_usage_limit: Optional[int] = None
@@ -82,6 +88,7 @@ class ValidateCouponRequest(BaseModel):
     subtotal: Decimal = Field(..., ge=0)
     delivery_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
     customer_email: Optional[str] = None
+    cart_items: Optional[list[dict[str, Any]]] = None
 
 
 def serialize_coupon(coupon: Coupon, total_savings: Decimal = Decimal("0.00")) -> dict[str, Any]:
@@ -93,6 +100,9 @@ def serialize_coupon(coupon: Coupon, total_savings: Decimal = Decimal("0.00")) -
         "discountType": coupon.discount_type,
         "discountValue": float(coupon.discount_value),
         "maxDiscountAmount": float(coupon.max_discount_amount) if coupon.max_discount_amount is not None else None,
+        "appliesTo": getattr(coupon, "applies_to", "all") or "all",
+        "collectionIds": [str(cid) for cid in (getattr(coupon, "collection_ids", []) or [])],
+        "categoryIds": [str(cid) for cid in (getattr(coupon, "category_ids", []) or [])],
         "minOrderValue": float(coupon.min_order_value),
         "isFirstOrderOnly": coupon.is_first_order_only,
         "totalUsageLimit": coupon.total_usage_limit,
@@ -185,6 +195,9 @@ def admin_create_coupon(
         discount_type=payload.discount_type,
         discount_value=payload.discount_value,
         max_discount_amount=payload.max_discount_amount,
+        applies_to=payload.applies_to or "all",
+        collection_ids=payload.collection_ids or [],
+        category_ids=payload.category_ids or [],
         min_order_value=payload.min_order_value,
         is_first_order_only=payload.is_first_order_only,
         total_usage_limit=payload.total_usage_limit,
@@ -256,6 +269,12 @@ def admin_update_coupon(
         coupon.discount_value = payload.discount_value
     if payload.max_discount_amount is not None:
         coupon.max_discount_amount = payload.max_discount_amount
+    if payload.applies_to is not None:
+        coupon.applies_to = payload.applies_to
+    if payload.collection_ids is not None:
+        coupon.collection_ids = payload.collection_ids
+    if payload.category_ids is not None:
+        coupon.category_ids = payload.category_ids
     if payload.min_order_value is not None:
         coupon.min_order_value = payload.min_order_value
     if payload.is_first_order_only is not None:
@@ -437,6 +456,9 @@ def get_available_storefront_coupons(
             "discountType": c.discount_type,
             "discountValue": float(c.discount_value),
             "maxDiscountAmount": float(c.max_discount_amount) if c.max_discount_amount is not None else None,
+            "appliesTo": getattr(c, "applies_to", "all") or "all",
+            "collectionIds": [str(cid) for cid in (getattr(c, "collection_ids", []) or [])],
+            "categoryIds": [str(cid) for cid in (getattr(c, "category_ids", []) or [])],
             "minOrderValue": float(c.min_order_value),
             "isFirstOrderOnly": c.is_first_order_only,
             "expiresAt": c.expires_at.isoformat() if c.expires_at else None,
@@ -448,6 +470,124 @@ def get_available_storefront_coupons(
 # ---------------------------------------------------------------------------
 # Storefront Customer Validation Endpoint
 # ---------------------------------------------------------------------------
+
+def evaluate_coupon_targeting(
+    coupon: Coupon,
+    subtotal: Decimal,
+    delivery_fee: Decimal,
+    cart_items: Optional[list[dict[str, Any]]],
+    session: Session,
+) -> tuple[bool, str, Decimal, Decimal]:
+    applies_to = getattr(coupon, "applies_to", "all") or "all"
+    col_ids = [str(c).strip() for c in (getattr(coupon, "collection_ids", []) or []) if str(c).strip()]
+    cat_ids = [str(c).strip() for c in (getattr(coupon, "category_ids", []) or []) if str(c).strip()]
+
+    # Case 1: Applies to All Products
+    if applies_to == "all" or (not col_ids and not cat_ids):
+        qualifying_subtotal = subtotal
+        discount_amount = _calculate_discount(coupon, qualifying_subtotal, delivery_fee)
+        return True, "", qualifying_subtotal, discount_amount
+
+    # If targeted to collections or categories, cart_items must be provided
+    if not cart_items:
+        return False, f"Promo code '{coupon.code}' is only valid for specific products. Please add qualifying items to your cart.", Decimal("0.00"), Decimal("0.00")
+
+    # Extract all product UUIDs and line totals from cart items
+    item_product_map: list[tuple[UUID, Decimal]] = []
+    for itm in cart_items:
+        raw_pid = itm.get("product_id") or itm.get("productId") or itm.get("id")
+        if not raw_pid:
+            continue
+        try:
+            pid = UUID(str(raw_pid))
+            qty = Decimal(str(itm.get("quantity") or 1))
+            unit_price = Decimal(str(itm.get("price") or itm.get("unit_price") or 0))
+            line_total = Decimal(str(itm.get("line_total") or itm.get("subtotal") or (qty * unit_price)))
+            item_product_map.append((pid, line_total))
+        except Exception:
+            continue
+
+    prod_uuids = [p[0] for p in item_product_map]
+    if not prod_uuids:
+        return False, f"No qualifying items found in cart for promo code '{coupon.code}'.", Decimal("0.00"), Decimal("0.00")
+
+    qualifying_pids = set()
+
+    # Case 2: Specific Collections
+    if applies_to == "collections" and col_ids:
+        col_uuids = []
+        for c in col_ids:
+            try:
+                col_uuids.append(UUID(c))
+            except Exception:
+                pass
+        if col_uuids:
+            matching_rows = session.exec(
+                select(ProductCollection.product_id).where(
+                    ProductCollection.product_id.in_(prod_uuids),
+                    ProductCollection.collection_id.in_(col_uuids),
+                )
+            ).all()
+            qualifying_pids = set(matching_rows)
+
+        if not qualifying_pids:
+            col_names = session.exec(
+                select(Collection.name).where(Collection.id.in_(col_uuids))
+            ).all()
+            names_str = ", ".join(col_names) if col_names else "selected collections"
+            return False, f"Promo code '{coupon.code}' is only valid for items in collection(s): {names_str}.", Decimal("0.00"), Decimal("0.00")
+
+    # Case 3: Specific Categories
+    elif applies_to == "categories" and cat_ids:
+        cat_uuids = []
+        cat_names_raw = set()
+        for c in cat_ids:
+            try:
+                cat_uuids.append(UUID(c))
+            except Exception:
+                cat_names_raw.add(c.lower().strip())
+
+        matching_products = session.exec(
+            select(Product).where(Product.id.in_(prod_uuids))
+        ).all()
+
+        for p in matching_products:
+            if (p.category_id and p.category_id in cat_uuids) or (p.category and p.category.lower().strip() in cat_names_raw):
+                qualifying_pids.add(p.id)
+
+        if not qualifying_pids:
+            cat_names = []
+            if cat_uuids:
+                cat_names.extend(session.exec(select(Category.name).where(Category.id.in_(cat_uuids))).all())
+            cat_names.extend(list(cat_names_raw))
+            names_str = ", ".join(cat_names) if cat_names else "selected categories"
+            return False, f"Promo code '{coupon.code}' is only valid for items in category: {names_str}.", Decimal("0.00"), Decimal("0.00")
+
+    qualifying_subtotal = Decimal("0.00")
+    for pid, line_total in item_product_map:
+        if pid in qualifying_pids:
+            qualifying_subtotal += line_total
+
+    if qualifying_subtotal <= Decimal("0.00"):
+        return False, f"No qualifying items found in cart for promo code '{coupon.code}'.", Decimal("0.00"), Decimal("0.00")
+
+    discount_amount = _calculate_discount(coupon, qualifying_subtotal, delivery_fee)
+    return True, "", qualifying_subtotal, discount_amount
+
+
+def _calculate_discount(coupon: Coupon, base_amount: Decimal, delivery_fee: Decimal) -> Decimal:
+    discount_amount = Decimal("0.00")
+    if coupon.discount_type == "percentage":
+        computed = (base_amount * coupon.discount_value) / Decimal("100.00")
+        if coupon.max_discount_amount is not None and coupon.max_discount_amount > 0:
+            computed = min(computed, coupon.max_discount_amount)
+        discount_amount = min(computed, base_amount)
+    elif coupon.discount_type == "fixed_amount":
+        discount_amount = min(coupon.discount_value, base_amount)
+    elif coupon.discount_type == "free_shipping":
+        discount_amount = delivery_fee
+    return discount_amount
+
 
 @router.post("/validate/{site_id}")
 def validate_storefront_coupon(
@@ -545,17 +685,20 @@ def validate_storefront_coupon(
                     detail=f"You have already used promo code '{clean_code}' the maximum allowed number of times ({coupon.per_customer_limit}).",
                 )
 
-    # Compute discount amount
-    discount_amount = Decimal("0.00")
-    if coupon.discount_type == "percentage":
-        computed = (subtotal * coupon.discount_value) / Decimal("100.00")
-        if coupon.max_discount_amount is not None and coupon.max_discount_amount > 0:
-            computed = min(computed, coupon.max_discount_amount)
-        discount_amount = min(computed, subtotal)
-    elif coupon.discount_type == "fixed_amount":
-        discount_amount = min(coupon.discount_value, subtotal)
-    elif coupon.discount_type == "free_shipping":
-        discount_amount = payload.delivery_fee
+    # Evaluate targeting and compute discount
+    is_eligible, err_msg, qualifying_subtotal, discount_amount = evaluate_coupon_targeting(
+        coupon=coupon,
+        subtotal=subtotal,
+        delivery_fee=payload.delivery_fee,
+        cart_items=payload.cart_items,
+        session=session,
+    )
+
+    if not is_eligible:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=err_msg or f"Promo code '{clean_code}' is not applicable to the items in your cart.",
+        )
 
     discount_amount = round(discount_amount, 2)
     final_subtotal = max(Decimal("0.00"), subtotal - discount_amount)
@@ -569,9 +712,12 @@ def validate_storefront_coupon(
             "discountType": coupon.discount_type,
             "discountValue": float(coupon.discount_value),
             "discountAmount": float(discount_amount),
+            "appliesTo": getattr(coupon, "applies_to", "all") or "all",
+            "qualifyingSubtotal": float(qualifying_subtotal),
             "description": coupon.description,
         },
         "discountAmount": float(discount_amount),
+        "qualifyingSubtotal": float(qualifying_subtotal),
         "finalSubtotal": float(final_subtotal),
         "finalTotal": float(final_total),
         "message": f"Promo code '{coupon.code}' applied successfully! You saved ₹{discount_amount:,.2f}.",

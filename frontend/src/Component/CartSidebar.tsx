@@ -987,6 +987,7 @@ const CartSidebar: React.FC<CartSidebarProps> = ({
             <PromoCodeInput
               siteId={siteId || slug || ""}
               subtotal={subtotal}
+              cartItems={cartItems}
               deliveryFee={shippingCharge}
               appliedCoupon={appliedCoupon}
               onCouponApplied={handleCouponApplied}

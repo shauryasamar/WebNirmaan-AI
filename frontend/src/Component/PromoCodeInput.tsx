@@ -17,6 +17,9 @@ export interface AvailableCoupon {
   discountType: "percentage" | "fixed_amount" | "free_shipping";
   discountValue: number;
   maxDiscountAmount?: number | null;
+  appliesTo?: "all" | "collections" | "categories";
+  collectionIds?: string[];
+  categoryIds?: string[];
   minOrderValue: number;
   isFirstOrderOnly: boolean;
   expiresAt?: string | null;
@@ -25,6 +28,17 @@ export interface AvailableCoupon {
 interface PromoCodeInputProps {
   siteId: string;
   subtotal: number;
+  cartItems?: Array<{
+    id?: string | number;
+    product_id?: string | number;
+    price?: number;
+    quantity?: number;
+    category_id?: string | null;
+    category?: string | null;
+    category_name?: string | null;
+    collections?: Array<{ id: string; name?: string }>;
+    [key: string]: any;
+  }>;
   deliveryFee?: number;
   customerEmail?: string;
   appliedCoupon: ValidatedCoupon | null;
@@ -65,6 +79,7 @@ function isColorDark(color?: string): boolean {
 export const PromoCodeInput: React.FC<PromoCodeInputProps> = ({
   siteId,
   subtotal,
+  cartItems = [],
   deliveryFee = 0,
   customerEmail = "",
   appliedCoupon,
@@ -98,6 +113,18 @@ export const PromoCodeInput: React.FC<PromoCodeInputProps> = ({
     : isDark
     ? "rgba(255, 255, 255, 0.55)"
     : "rgba(15, 23, 42, 0.55)";
+
+  // Format cart items payload for validation
+  const serializedCartItems = (cartItems || []).map((item) => ({
+    product_id: String(item.id || item.product_id || ""),
+    id: String(item.id || item.product_id || ""),
+    price: Number(item.price || 0),
+    quantity: Number(item.quantity || 1),
+    category_id: item.category_id || null,
+    category: item.category || item.category_name || null,
+    category_name: item.category_name || item.category || null,
+    collections: item.collections || [],
+  }));
 
   // Fetch available public coupons on mount / siteId change
   useEffect(() => {
@@ -142,6 +169,7 @@ export const PromoCodeInput: React.FC<PromoCodeInputProps> = ({
           subtotal: subtotal,
           delivery_fee: deliveryFee,
           customer_email: customerEmail,
+          cart_items: serializedCartItems,
         }),
       });
 
@@ -185,6 +213,7 @@ export const PromoCodeInput: React.FC<PromoCodeInputProps> = ({
           subtotal: subtotal,
           delivery_fee: deliveryFee,
           customer_email: customerEmail,
+          cart_items: serializedCartItems,
         }),
       });
 
@@ -495,6 +524,34 @@ export const PromoCodeInput: React.FC<PromoCodeInputProps> = ({
                                 ? "Free Delivery"
                                 : `₹${coupon.discountValue} OFF`}
                             </span>
+
+                            {coupon.appliesTo === "collections" ? (
+                              <span
+                                style={{
+                                  fontSize: "10px",
+                                  fontWeight: 700,
+                                  padding: "1px 5px",
+                                  borderRadius: "3px",
+                                  background: "rgba(124, 58, 237, 0.12)",
+                                  color: isDark ? "#c4b5fd" : "#7c3aed",
+                                }}
+                              >
+                                Specific Collections
+                              </span>
+                            ) : coupon.appliesTo === "categories" ? (
+                              <span
+                                style={{
+                                  fontSize: "10px",
+                                  fontWeight: 700,
+                                  padding: "1px 5px",
+                                  borderRadius: "3px",
+                                  background: "rgba(8, 145, 178, 0.12)",
+                                  color: isDark ? "#67e8f9" : "#0891b2",
+                                }}
+                              >
+                                Specific Categories
+                              </span>
+                            ) : null}
                           </div>
 
                           <div style={{ fontSize: "11px", color: isDark ? "rgba(255,255,255,0.6)" : "rgba(15,23,42,0.6)", marginTop: "3px", lineHeight: 1.3 }}>

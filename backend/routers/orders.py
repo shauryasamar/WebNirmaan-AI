@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 from models import (
     Cart,
     CartItem,
+    Category,
+    Collection,
     Coupon,
     CouponUsage,
     DeliveryAgent,
@@ -31,6 +33,7 @@ from models import (
     OrderItem,
     OrderStatusHistory,
     Product,
+    ProductCollection,
     Shipment,
     Site,
     TenantLedgerEntry,
@@ -602,6 +605,7 @@ def evaluate_promo_discount(
     session: Optional[Session] = None,
     customer_email: Optional[str] = None,
     delivery_fee: Decimal = Decimal("0.00"),
+    cart_items: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[Optional[str], Decimal, Optional[Coupon]]:
     normalized = str(promo_code or "").strip().upper()
     if not normalized:
@@ -660,14 +664,85 @@ def evaluate_promo_discount(
             if usage_count >= coupon.per_customer_limit:
                 return None, Decimal("0.00"), None
 
+    # Evaluate targeting (collections / categories)
+    applies_to = getattr(coupon, "applies_to", "all") or "all"
+    col_ids = [str(c).strip() for c in (getattr(coupon, "collection_ids", []) or []) if str(c).strip()]
+    cat_ids = [str(c).strip() for c in (getattr(coupon, "category_ids", []) or []) if str(c).strip()]
+
+    qualifying_subtotal = subtotal
+
+    if (applies_to == "collections" and col_ids) or (applies_to == "categories" and cat_ids):
+        if not cart_items:
+            return None, Decimal("0.00"), None
+
+        item_product_map: list[tuple[UUID, Decimal]] = []
+        for itm in cart_items:
+            raw_pid = itm.get("product_id") or itm.get("productId") or itm.get("id")
+            if not raw_pid:
+                continue
+            try:
+                pid = UUID(str(raw_pid))
+                qty = Decimal(str(itm.get("quantity") or 1))
+                unit_price = Decimal(str(itm.get("price") or itm.get("unit_price") or 0))
+                line_total = Decimal(str(itm.get("line_total") or itm.get("subtotal") or (qty * unit_price)))
+                item_product_map.append((pid, line_total))
+            except Exception:
+                continue
+
+        prod_uuids = [p[0] for p in item_product_map]
+        if not prod_uuids:
+            return None, Decimal("0.00"), None
+
+        qualifying_pids = set()
+
+        if applies_to == "collections" and col_ids:
+            col_uuids = []
+            for c in col_ids:
+                try:
+                    col_uuids.append(UUID(c))
+                except Exception:
+                    pass
+            if col_uuids:
+                matching_rows = session.exec(
+                    select(ProductCollection.product_id).where(
+                        ProductCollection.product_id.in_(prod_uuids),
+                        ProductCollection.collection_id.in_(col_uuids),
+                    )
+                ).all()
+                qualifying_pids = set(matching_rows)
+
+        elif applies_to == "categories" and cat_ids:
+            cat_uuids = []
+            cat_names_raw = set()
+            for c in cat_ids:
+                try:
+                    cat_uuids.append(UUID(c))
+                except Exception:
+                    cat_names_raw.add(c.lower().strip())
+
+            matching_products = session.exec(
+                select(Product).where(Product.id.in_(prod_uuids))
+            ).all()
+
+            for p in matching_products:
+                if (p.category_id and p.category_id in cat_uuids) or (p.category and p.category.lower().strip() in cat_names_raw):
+                    qualifying_pids.add(p.id)
+
+        if not qualifying_pids:
+            return None, Decimal("0.00"), None
+
+        qualifying_subtotal = sum((line_total for pid, line_total in item_product_map if pid in qualifying_pids), Decimal("0.00"))
+        if qualifying_subtotal <= Decimal("0.00"):
+            return None, Decimal("0.00"), None
+
     discount_amount = Decimal("0.00")
     if coupon.discount_type == "percentage":
-        computed = (subtotal * coupon.discount_value) / Decimal("100.00")
+        computed = (qualifying_subtotal * coupon.discount_value) / Decimal("100.00")
         if coupon.max_discount_amount is not None and coupon.max_discount_amount > 0:
             computed = min(computed, coupon.max_discount_amount)
-        discount_amount = min(computed, subtotal)
+        discount_amount = min(computed, qualifying_subtotal)
     elif coupon.discount_type == "fixed_amount":
-        discount_amount = min(coupon.discount_value, subtotal)
+        discount_amount = min(coupon.discount_value, qualifying_subtotal)
     elif coupon.discount_type == "free_shipping":
         discount_amount = delivery_fee
 
@@ -864,6 +939,7 @@ def evaluate_pricing(
         site_id=site_id,
         session=session,
         customer_email=customer_email,
+        cart_items=cart_items,
     )
     subtotal_after_discount = max(subtotal - promo_discount, Decimal("0.00"))
 
